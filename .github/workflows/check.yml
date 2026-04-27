@@ -82,15 +82,23 @@ jobs:
           set -e
           LINE='${{ steps.check.outputs.line }}'
           [ -z "$LINE" ] && LINE="[$(date -u +'%Y-%m-%d %H:%M:%S')] error:no-output"
-          touch runs.log
-          echo "$LINE" >> runs.log
-          # keep file bounded — last 2000 lines (~16 days at 12-min cadence)
-          tail -n 2000 runs.log > runs.log.tmp && mv runs.log.tmp runs.log
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git pull --rebase origin main || true
-          git add runs.log
-          if ! git diff --cached --quiet; then
+          # Try up to 4 times: pull (clean tree), append, commit, push.
+          # Retry handles the race when another run pushes between our pull and push.
+          for attempt in 1 2 3 4; do
+            git fetch origin main
+            git reset --hard origin/main          # always start from latest remote
+            touch runs.log
+            echo "$LINE" >> runs.log
+            tail -n 2000 runs.log > runs.log.tmp && mv runs.log.tmp runs.log
+            git add runs.log
+            git diff --cached --quiet && break    # nothing to commit
             git commit -m "log: ${LINE}" -m "[skip ci]"
-            git push
-          fi
+            if git push; then
+              echo "pushed on attempt $attempt"
+              break
+            fi
+            echo "push failed on attempt $attempt; retrying..."
+            sleep $((RANDOM % 4 + 2))
+          done
