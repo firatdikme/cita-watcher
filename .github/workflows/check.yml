@@ -19,6 +19,7 @@ jobs:
     timeout-minutes: 5
 
     env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"   # silence Node.js 20 deprecation warning
       CITA_DOC_TYPE:     ${{ vars.CITA_DOC_TYPE     || 'N.I.E.' }}
       CITA_PROVINCIA_ID: ${{ vars.CITA_PROVINCIA_ID || '205'    }}
       CITA_SEDE_ID:      ${{ vars.CITA_SEDE_ID      || '2'      }}
