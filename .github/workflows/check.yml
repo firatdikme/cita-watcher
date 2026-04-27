@@ -49,11 +49,13 @@ jobs:
 
       - name: Run check
         id: check
+        continue-on-error: true
         run: |
           set -o pipefail
           OUT=$(python cita_watcher.py 2>&1 | tee /dev/stderr)
-          # Last line of output is "[ts] result"
-          LAST=$(printf '%s\n' "$OUT" | tail -n 1)
+          # Result line is the one starting with "[YYYY-..." — Playwright errors are multi-line,
+          # so grab the first such line, not just tail.
+          LAST=$(printf '%s\n' "$OUT" | grep -m1 '^\[' || echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] error:no-output-line")
           echo "line=$LAST" >> "$GITHUB_OUTPUT"
           # Render in the run's job-summary page
           {
@@ -63,6 +65,15 @@ jobs:
             echo "$LAST"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload debug artifacts on error
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-${{ github.run_id }}
+          path: debug/
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Append to runs.log and push
         if: always()

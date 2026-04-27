@@ -112,14 +112,20 @@ def check_once() -> str:
                 "#btnAceptar, input[type=button][value='Aceptar'], button:has-text('Aceptar')"
             ).first.click()
             page.wait_for_url(re.compile(r"/acValidarEntrada"), timeout=TIMEOUT_MS)
-
-            # Step 5 — Solicitar Cita
-            page.click("#btnEnviar")
-            page.wait_for_load_state("domcontentloaded")
             page.wait_for_timeout(1500)
 
-            # Step 6 — interpret result
+            # Step 5 — /acValidarEntrada is either "Opciones de la cita" (slots may exist:
+            # click #btnEnviar) or already the "no hay citas" page. Handle both.
             text = page.inner_text("body").lower()
+            if NO_SLOTS_MARKER in text:
+                return "unavailable"
+            if page.locator("#btnEnviar").count() > 0:
+                page.click("#btnEnviar")
+                page.wait_for_load_state("domcontentloaded")
+                page.wait_for_timeout(1500)
+                text = page.inner_text("body").lower()
+
+            # Step 6 — interpret final result
             if "too many requests" in text or "429" in page.title():
                 return "rate_limited"
             if page.locator("iframe[src*='recaptcha'], iframe[src*='hcaptcha']").count() > 0:
@@ -129,11 +135,28 @@ def check_once() -> str:
             return "available"
 
         except PWTimeout as e:
+            _dump_debug(page, "timeout")
             return f"error:timeout:{str(e)[:140]}"
         except Exception as e:
+            _dump_debug(page, "exception")
             return f"error:{type(e).__name__}:{str(e)[:140]}"
         finally:
             browser.close()
+
+
+def _dump_debug(page, tag: str) -> None:
+    """On error, save screenshot + HTML to ./debug/ for post-mortem (uploaded as
+    a CI artifact)."""
+    try:
+        os.makedirs("debug", exist_ok=True)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        page.screenshot(path=f"debug/{stamp}-{tag}.png", full_page=True)
+        with open(f"debug/{stamp}-{tag}.html", "w", encoding="utf-8") as fh:
+            fh.write(page.content())
+        with open(f"debug/{stamp}-{tag}.url.txt", "w", encoding="utf-8") as fh:
+            fh.write(page.url)
+    except Exception as e:
+        print(f"[warn] debug dump failed: {e}", file=sys.stderr)
 
 
 def main() -> None:
