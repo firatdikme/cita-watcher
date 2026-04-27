@@ -145,18 +145,20 @@ def check_once() -> str:
 
 
 def _dump_debug(page, tag: str) -> None:
-    """On error, save screenshot + HTML to ./debug/ for post-mortem (uploaded as
-    a CI artifact)."""
-    try:
-        os.makedirs("debug", exist_ok=True)
-        stamp = time.strftime("%Y%m%d-%H%M%S")
-        page.screenshot(path=f"debug/{stamp}-{tag}.png", full_page=True)
-        with open(f"debug/{stamp}-{tag}.html", "w", encoding="utf-8") as fh:
-            fh.write(page.content())
-        with open(f"debug/{stamp}-{tag}.url.txt", "w", encoding="utf-8") as fh:
-            fh.write(page.url)
-    except Exception as e:
-        print(f"[warn] debug dump failed: {e}", file=sys.stderr)
+    """On error, save screenshot + HTML to ./debug/. Each step has its own
+    try/except + tight timeout so a hung page can't stall the dump itself."""
+    os.makedirs("debug", exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    base = f"debug/{stamp}-{tag}"
+    for label, fn in [
+        ("screenshot", lambda: page.screenshot(path=f"{base}.png", full_page=True, timeout=8000)),
+        ("html",       lambda: open(f"{base}.html", "w", encoding="utf-8").write(page.content())),
+        ("url",        lambda: open(f"{base}.url.txt", "w", encoding="utf-8").write(page.url)),
+    ]:
+        try:
+            fn()
+        except Exception as e:
+            print(f"[warn] debug {label} failed: {e}", file=sys.stderr)
 
 
 def main() -> None:

@@ -54,9 +54,9 @@ jobs:
         run: |
           set -o pipefail
           OUT=$(python cita_watcher.py 2>&1 | tee /dev/stderr)
-          # Result line is the one starting with "[YYYY-..." — Playwright errors are multi-line,
-          # so grab the first such line, not just tail.
-          LAST=$(printf '%s\n' "$OUT" | grep -m1 '^\[' || echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] error:no-output-line")
+          # Result line is the one starting with "[YYYY-MM-DD..." — must match the date prefix
+          # specifically so we don't accidentally pick up "[warn] ..." lines from stderr.
+          LAST=$(printf '%s\n' "$OUT" | grep -m1 '^\[20[0-9][0-9]-' || echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] error:no-output-line")
           echo "line=$LAST" >> "$GITHUB_OUTPUT"
           # Render in the run's job-summary page
           {
