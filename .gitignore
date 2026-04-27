@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+watcher.log
+last_run.log
+
+# Local secrets — never commit
+cita.env.local
+.env
