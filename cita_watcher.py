@@ -206,16 +206,6 @@ def _dump_debug(page, tag: str) -> None:
             print(f"[warn] debug {label} failed: {e}", file=sys.stderr)
 
 
-STATE_FILE = "last_state.txt"
-
-
-def _last_state() -> str:
-    try:
-        return open(STATE_FILE, encoding="utf-8").read().strip()
-    except OSError:
-        return ""
-
-
 def main() -> None:
     if JITTER_MAX_S > 0:
         time.sleep(random.randint(0, JITTER_MAX_S))
@@ -224,31 +214,33 @@ def main() -> None:
     stamp = time.strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{stamp}] {result}")
 
-    last = _last_state()
-    try:
-        open(STATE_FILE, "w", encoding="utf-8").write(result)
-    except OSError:
-        pass
-
+    # Every run pushes a notification so a silent watcher is never mistaken
+    # for a working one. Title/priority vary by status; "unavailable" uses
+    # min priority so the phone doesn't buzz, it just logs in the ntfy feed.
     if result == "available":
         notify(
-            "Cita available!",
-            f"Slot found for {DOC_TYPE} {DOC_NUMBER}.\n"
+            "CITA VAR - hemen gir!",
+            f"Slot found WITHOUT Cl@ve for {DOC_TYPE} {DOC_NUMBER}.\n"
             f"Tramite {TRAMITE_ID} at sede {SEDE_ID} (Barcelona extranjeria).\n"
             f"Book NOW: {START_URL}",
             priority="urgent",
             tags="rotating_light,calendar",
         )
-    elif result == "available_clave" and last != "available_clave":
-        # Cl@ve slots tend to stay open for stretches — only ping on the
-        # transition so the phone isn't buzzed every 12 minutes.
+    elif result == "available_clave":
         notify(
-            "Cita available via Cl@ve",
+            "Cl@ve ile cita var",
             f"No slots WITHOUT Cl@ve, but slots ARE bookable WITH Cl@ve.\n"
             f"Tramite {TRAMITE_ID} (Barcelona extranjeria).\n"
             f"Book with Cl@ve: {START_URL}",
             priority="high",
             tags="key,calendar",
+        )
+    elif result == "unavailable":
+        notify(
+            "Cita yok",
+            f"[{stamp}] no hay citas (tramite {TRAMITE_ID}, Barcelona). Watcher calisiyor.",
+            priority="min",
+            tags="hourglass_flowing_sand",
         )
     elif result == "captcha":
         notify(
@@ -257,7 +249,20 @@ def main() -> None:
             priority="high",
             tags="warning",
         )
-    # 'unavailable', 'rate_limited' and 'error:*' are silent — only logged.
+    elif result == "rate_limited":
+        notify(
+            "Cita watcher: rate limited",
+            f"[{stamp}] Site is throttling us (429). Will retry next run.",
+            priority="low",
+            tags="warning",
+        )
+    else:  # error:*
+        notify(
+            "Cita watcher: hata",
+            f"[{stamp}] {result}",
+            priority="low",
+            tags="warning",
+        )
 
 
 if __name__ == "__main__":
