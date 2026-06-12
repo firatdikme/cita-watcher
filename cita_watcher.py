@@ -222,6 +222,11 @@ def main() -> None:
         time.sleep(random.randint(0, JITTER_MAX_S))
 
     result = check_once()
+    if result.startswith("error:"):
+        # Transient network drops mid-flow are common on this site — one
+        # retry per run before reporting the error.
+        time.sleep(30)
+        result = check_once()
     stamp = time.strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{stamp}] {result}")
 
