@@ -61,6 +61,26 @@ def notify(title: str, message: str, priority: str = "default", tags: str = "") 
         print(f"[warn] ntfy push failed: {e}", file=sys.stderr)
 
 
+def _dismiss_cookies(page) -> None:
+    """The cookie banner is injected after load and overlays the action
+    buttons, swallowing clicks. Accept it whenever it is present."""
+    try:
+        btn = page.locator("a:has-text('Acepto')")
+        if btn.count() > 0 and btn.first.is_visible():
+            btn.first.click(timeout=2000)
+            page.wait_for_timeout(300)
+    except Exception:
+        pass
+    # Belt and braces: drop any leftover cookie overlay nodes.
+    try:
+        page.evaluate(
+            "document.querySelectorAll(\"div[id*='cookie'],div[class*='cookie']\")"
+            ".forEach(e => e.remove())"
+        )
+    except Exception:
+        pass
+
+
 def check_once() -> str:
     if not DOC_NUMBER or not FULL_NAME:
         return "error:config:CITA_DOC_NUMBER and CITA_FULL_NAME must be set"
@@ -104,21 +124,13 @@ def check_once() -> str:
                     return "error:blocked:fortigate"
                 return "error:blocked:no-form (TSPD challenge not passed?)"
 
-            # Dismiss the cookie banner once — its overlay can swallow clicks.
-            try:
-                cookie_btn = page.locator("a:has-text('Acepto'), #cookie_action_close_header")
-                if cookie_btn.count() > 0:
-                    cookie_btn.first.click(timeout=3000)
-                    page.wait_for_timeout(300)
-            except Exception:
-                pass
-
             # The selection form appears twice: on /citar and again on
             # /selectSede (the platform's confirm step). Submit both.
             for _ in range(3):
                 if not re.search(r"/(citar|selectSede)", page.url):
                     break
                 page.wait_for_selector("select[name=sede]", state="attached", timeout=TIMEOUT_MS)
+                _dismiss_cookies(page)
                 page.select_option("select[name=sede]", SEDE_ID)
                 page.wait_for_timeout(800)
                 page.select_option('select[name="tramiteGrupo[0]"]', TRAMITE_ID)
@@ -130,10 +142,12 @@ def check_once() -> str:
                 page.wait_for_timeout(800)
 
             if re.search(r"/(citar|selectSede)", page.url):
+                _dump_debug(page, "stuck-on-select")
                 return "error:stuck-on-select (form did not advance)"
 
-            # Step 2 — info page; "Entrar" (some tramites skip straight to acEntrada)
+            # Step 2 — info page; "Presentacion sin Cl@ve" (div#btnEntrar)
             if "/acInfo" in page.url:
+                _dismiss_cookies(page)
                 page.click("#btnEntrar")
                 page.wait_for_url(re.compile(r"/acEntrada"), timeout=TIMEOUT_MS)
 
@@ -143,6 +157,7 @@ def check_once() -> str:
                 "D.N.I.":    "#rdbTipoDocDni",
                 "PASAPORTE": "#rdbTipoDocPas",
             }[DOC_TYPE]
+            _dismiss_cookies(page)
             if page.locator(radio_id).count() > 0:
                 page.click(radio_id)
             page.fill("#txtIdCitado", DOC_NUMBER)
@@ -160,6 +175,7 @@ def check_once() -> str:
             if NO_SLOTS_MARKER in text:
                 return "unavailable"
             if page.locator("#btnEnviar").count() > 0:
+                _dismiss_cookies(page)
                 page.click("#btnEnviar")
                 page.wait_for_load_state("domcontentloaded")
                 page.wait_for_timeout(1500)
