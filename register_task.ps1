@@ -9,7 +9,7 @@ $trigger   = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
              -RepetitionInterval (New-TimeSpan -Minutes 10)
 $settings  = New-ScheduledTaskSettingsSet -StartWhenAvailable `
              -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries `
-             -ExecutionTimeLimit (New-TimeSpan -Minutes 5) `
+             -ExecutionTimeLimit (New-TimeSpan -Minutes 8) `
              -MultipleInstances IgnoreNew
 $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
 
