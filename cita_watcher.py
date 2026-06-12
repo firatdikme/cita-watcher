@@ -1,7 +1,13 @@
-"""Cita previa watcher for Registro Civil (icpplustiej).
+"""Cita previa watcher for Extranjeria Barcelona (icpplustieb).
 
-Walks the booking flow and posts to ntfy.sh when a slot opens.
-Designed to run on a ~12-min schedule (Windows Task Scheduler or GitHub Actions).
+Walks the booking flow for POLICIA-CARTA DE INVITACION and posts to ntfy.sh
+when a slot opens. Designed to run on a ~12-min schedule via Windows Task
+Scheduler (run.bat + register_task.ps1).
+
+NOTE: this site (icp.administracionelectronica.gob.es) blocks datacenter IPs,
+so GitHub Actions cannot reach it — the watcher must run from a residential
+connection. It also fronts an F5/TSPD JavaScript challenge, which the real
+Chrome channel passes (the bundled Playwright Chromium does not).
 """
 
 import os
@@ -12,23 +18,29 @@ import time
 import urllib.request
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 # ============================ CONFIG (non-sensitive) ========================
-PROVINCIA_ID = os.environ.get("CITA_PROVINCIA_ID", "205")    # Barcelona
-SEDE_ID      = os.environ.get("CITA_SEDE_ID", "2")           # RC Exclusivo Nº 2 Barcelona
-TRAMITE_ID   = os.environ.get("CITA_TRAMITE_ID", "4142")     # Jura de nacionalidad española post 08/11/2015
-DOC_TYPE     = os.environ.get("CITA_DOC_TYPE", "N.I.E.")     # N.I.E. | D.N.I. | PASAPORTE
+START_URL  = os.environ.get(
+    "CITA_START_URL",
+    "https://icp.administracionelectronica.gob.es/icpplustieb/citar?p=8&locale=es",
+)                                                            # Barcelona extranjeria
+SEDE_ID    = os.environ.get("CITA_SEDE_ID", "99")            # 99 = Cualquier oficina
+TRAMITE_ID = os.environ.get("CITA_TRAMITE_ID", "4037")       # POLICIA-CARTA DE INVITACION
+DOC_TYPE   = os.environ.get("CITA_DOC_TYPE", "N.I.E.")       # N.I.E. | D.N.I. | PASAPORTE
 
 # ============================ CONFIG (sensitive — env only) =================
-DOC_NUMBER   = os.environ.get("CITA_DOC_NUMBER")
-FULL_NAME    = os.environ.get("CITA_FULL_NAME")
-NTFY_TOPIC   = os.environ.get("CITA_NTFY_TOPIC")
+DOC_NUMBER = os.environ.get("CITA_DOC_NUMBER")
+FULL_NAME  = os.environ.get("CITA_FULL_NAME")
+NTFY_TOPIC = os.environ.get("CITA_NTFY_TOPIC")
 
 # ============================ Behaviour =====================================
 HEADLESS     = os.environ.get("CITA_HEADLESS", "1") == "1"
+CHANNEL      = os.environ.get("CITA_BROWSER_CHANNEL", "chrome")  # real Chrome passes TSPD
 TIMEOUT_MS   = int(os.environ.get("CITA_TIMEOUT_MS", "60000"))
 JITTER_MAX_S = int(os.environ.get("CITA_JITTER_MAX_S", "90"))
 
-START_URL       = "https://sede.administracionespublicas.gob.es/icpplustiej/citar?i=es&org=JUS-RC"
 NO_SLOTS_MARKER = "no hay citas disponibles"
 # ============================================================================
 
@@ -56,10 +68,12 @@ def check_once() -> str:
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=HEADLESS,
+            channel=CHANNEL or None,
             args=["--disable-blink-features=AutomationControlled"],
         )
         ctx = browser.new_context(
             locale="es-ES",
+            ignore_https_errors=True,
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -74,38 +88,63 @@ def check_once() -> str:
         page.on("dialog", lambda d: d.accept())
 
         try:
-            page.goto(START_URL, wait_until="networkidle", timeout=TIMEOUT_MS)
+            # Step 1 — citar page (oficina + tramite). The first hit serves an
+            # F5/TSPD JS challenge that reloads itself, so don't trust the
+            # initial load: wait for the sede select to actually appear.
+            page.goto(START_URL, wait_until="domcontentloaded", timeout=TIMEOUT_MS)
+            try:
+                page.wait_for_selector(
+                    "select[name=sede]", state="attached", timeout=TIMEOUT_MS
+                )
+            except PWTimeout:
+                text = page.inner_text("body").lower()
+                if "429" in page.title() or "too many requests" in text:
+                    return "rate_limited"
+                if "intrusion" in page.title().lower():
+                    return "error:blocked:fortigate"
+                return "error:blocked:no-form (TSPD challenge not passed?)"
 
-            if "429" in page.title() or "too many requests" in page.inner_text("body").lower():
-                return "rate_limited"
+            # Dismiss the cookie banner once — its overlay can swallow clicks.
+            try:
+                cookie_btn = page.locator("a:has-text('Acepto'), #cookie_action_close_header")
+                if cookie_btn.count() > 0:
+                    cookie_btn.first.click(timeout=3000)
+                    page.wait_for_timeout(300)
+            except Exception:
+                pass
 
-            # Step 1 — provincia
-            page.wait_for_selector("select[name=provincia]", state="visible", timeout=TIMEOUT_MS)
-            page.select_option("select[name=provincia]", PROVINCIA_ID)
-            page.wait_for_timeout(400)
-            page.click("#btnAceptar")
-            page.wait_for_url(re.compile(r"/(selectProvincia|selectSede)"), timeout=TIMEOUT_MS)
+            # The selection form appears twice: on /citar and again on
+            # /selectSede (the platform's confirm step). Submit both.
+            for _ in range(3):
+                if not re.search(r"/(citar|selectSede)", page.url):
+                    break
+                page.wait_for_selector("select[name=sede]", state="attached", timeout=TIMEOUT_MS)
+                page.select_option("select[name=sede]", SEDE_ID)
+                page.wait_for_timeout(800)
+                page.select_option('select[name="tramiteGrupo[0]"]', TRAMITE_ID)
+                page.wait_for_timeout(400)
+                page.click("#btnAceptar")
+                page.wait_for_url(
+                    re.compile(r"/(selectSede|acInfo|acEntrada)"), timeout=TIMEOUT_MS
+                )
+                page.wait_for_timeout(800)
 
-            # Step 2 — sede triggers AJAX populating tramiteGrupo[0]; pick trámite; click Aceptar
-            page.wait_for_selector("select[name=sede]", state="visible", timeout=TIMEOUT_MS)
-            page.select_option("select[name=sede]", SEDE_ID)
-            page.wait_for_timeout(1500)
-            page.select_option('select[name="tramiteGrupo[0]"]', TRAMITE_ID)
-            page.wait_for_timeout(400)
-            page.click("#btnAceptar")
-            page.wait_for_url(re.compile(r"/acInfo"), timeout=TIMEOUT_MS)
+            if re.search(r"/(citar|selectSede)", page.url):
+                return "error:stuck-on-select (form did not advance)"
 
-            # Step 3 — info page; click "Presentación sin Cl@ve" (id=btnEntrar, NOT a button)
-            page.click("#btnEntrar")
-            page.wait_for_url(re.compile(r"/acEntrada"), timeout=TIMEOUT_MS)
+            # Step 2 — info page; "Entrar" (some tramites skip straight to acEntrada)
+            if "/acInfo" in page.url:
+                page.click("#btnEntrar")
+                page.wait_for_url(re.compile(r"/acEntrada"), timeout=TIMEOUT_MS)
 
-            # Step 4 — identity
+            # Step 3 — identity
             radio_id = {
                 "N.I.E.":    "#rdbTipoDocNie",
                 "D.N.I.":    "#rdbTipoDocDni",
                 "PASAPORTE": "#rdbTipoDocPas",
             }[DOC_TYPE]
-            page.click(radio_id)
+            if page.locator(radio_id).count() > 0:
+                page.click(radio_id)
             page.fill("#txtIdCitado", DOC_NUMBER)
             page.fill("#txtDesCitado", FULL_NAME)
             page.locator(
@@ -114,8 +153,9 @@ def check_once() -> str:
             page.wait_for_url(re.compile(r"/acValidarEntrada"), timeout=TIMEOUT_MS)
             page.wait_for_timeout(1500)
 
-            # Step 5 — /acValidarEntrada is either "Opciones de la cita" (slots may exist:
-            # click #btnEnviar) or already the "no hay citas" page. Handle both.
+            # Step 4 — /acValidarEntrada is either "Opciones de la cita" (slots
+            # may exist: click #btnEnviar = "Solicitar Cita") or already the
+            # "no hay citas" page. Handle both.
             text = page.inner_text("body").lower()
             if NO_SLOTS_MARKER in text:
                 return "unavailable"
@@ -125,7 +165,7 @@ def check_once() -> str:
                 page.wait_for_timeout(1500)
                 text = page.inner_text("body").lower()
 
-            # Step 6 — interpret final result
+            # Step 5 — interpret final result
             if "too many requests" in text or "429" in page.title():
                 return "rate_limited"
             if page.locator("iframe[src*='recaptcha'], iframe[src*='hcaptcha']").count() > 0:
@@ -173,7 +213,7 @@ def main() -> None:
         notify(
             "Cita available!",
             f"Slot found for {DOC_TYPE} {DOC_NUMBER}.\n"
-            f"Trámite {TRAMITE_ID} at sede {SEDE_ID} (provincia {PROVINCIA_ID}).\n"
+            f"Tramite {TRAMITE_ID} at sede {SEDE_ID} (Barcelona extranjeria).\n"
             f"Book NOW: {START_URL}",
             priority="urgent",
             tags="rotating_light,calendar",

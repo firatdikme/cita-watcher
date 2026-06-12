@@ -11,11 +11,17 @@ import os
 import sys
 from playwright.sync_api import sync_playwright
 
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 INDEX_URL = "https://icp.administracionelectronica.gob.es/icpplus/index.html"
 HEADLESS = "--headful" not in sys.argv
+CHANNEL = "chrome" if "--chrome" in sys.argv else None
 PROVINCE = "Barcelona"
 if "--province" in sys.argv:
     PROVINCE = sys.argv[sys.argv.index("--province") + 1]
+if "--url" in sys.argv:
+    INDEX_URL = sys.argv[sys.argv.index("--url") + 1]
 
 OUT = "debug-discover"
 os.makedirs(OUT, exist_ok=True)
@@ -54,6 +60,7 @@ def dump_selects(page, label):
 with sync_playwright() as p:
     browser = p.chromium.launch(
         headless=HEADLESS,
+        channel=CHANNEL,
         args=["--disable-blink-features=AutomationControlled"],
     )
     ctx = browser.new_context(
@@ -72,8 +79,15 @@ with sync_playwright() as p:
     page.set_default_timeout(60000)
     page.on("dialog", lambda d: d.accept())
 
-    # Step 0 — province picker
-    page.goto(INDEX_URL, wait_until="networkidle", timeout=60000)
+    # Step 0 — province picker. The site fronts an F5/TSPD JS challenge that
+    # reloads the page once solved, so wait for a real <select> to appear
+    # rather than trusting the first load.
+    page.goto(INDEX_URL, wait_until="domcontentloaded", timeout=60000)
+    try:
+        page.wait_for_selector("select", state="attached", timeout=45000)
+    except Exception:
+        print("[warn] no <select> appeared within 45s — dumping whatever loaded", file=sys.stderr)
+    page.wait_for_timeout(1500)
     print(f"TITLE: {page.title()}")
     print(f"URL:   {page.url}")
     snap(page, "00-index")
@@ -86,6 +100,11 @@ with sync_playwright() as p:
         sys.exit(1)
 
     dump_selects(page, "index (province picker)")
+
+    if "/citar" in page.url:
+        # Already on the per-province tramite page — nothing more to do.
+        browser.close()
+        sys.exit(0)
 
     # Step 1 — pick province by label, submit
     prov_select = page.locator("select").first
