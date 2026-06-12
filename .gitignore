@@ -7,3 +7,6 @@ last_run.log
 # Local secrets — never commit
 cita.env.local
 .env
+last_state.txt
+debug/
+debug-discover/

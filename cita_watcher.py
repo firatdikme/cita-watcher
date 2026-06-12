@@ -42,6 +42,9 @@ TIMEOUT_MS   = int(os.environ.get("CITA_TIMEOUT_MS", "60000"))
 JITTER_MAX_S = int(os.environ.get("CITA_JITTER_MAX_S", "90"))
 
 NO_SLOTS_MARKER = "no hay citas disponibles"
+# Final page may say "no slots without Cl@ve" while offering slots VIA Cl@ve:
+# "SI TIENEN A SU DISPOSICION MEDIANTE EL USO DE CL@VE, CITAS DISPONIBLES..."
+CLAVE_SLOTS_MARKER = "citas disponibles para su reserva"
 # ============================================================================
 
 
@@ -171,6 +174,8 @@ def check_once() -> str:
             if page.locator("iframe[src*='recaptcha'], iframe[src*='hcaptcha']").count() > 0:
                 return "captcha"
             if NO_SLOTS_MARKER in text:
+                if "cl@ve" in text and CLAVE_SLOTS_MARKER in text:
+                    return "available_clave"
                 return "unavailable"
             return "available"
 
@@ -201,6 +206,16 @@ def _dump_debug(page, tag: str) -> None:
             print(f"[warn] debug {label} failed: {e}", file=sys.stderr)
 
 
+STATE_FILE = "last_state.txt"
+
+
+def _last_state() -> str:
+    try:
+        return open(STATE_FILE, encoding="utf-8").read().strip()
+    except OSError:
+        return ""
+
+
 def main() -> None:
     if JITTER_MAX_S > 0:
         time.sleep(random.randint(0, JITTER_MAX_S))
@@ -208,6 +223,12 @@ def main() -> None:
     result = check_once()
     stamp = time.strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{stamp}] {result}")
+
+    last = _last_state()
+    try:
+        open(STATE_FILE, "w", encoding="utf-8").write(result)
+    except OSError:
+        pass
 
     if result == "available":
         notify(
@@ -217,6 +238,17 @@ def main() -> None:
             f"Book NOW: {START_URL}",
             priority="urgent",
             tags="rotating_light,calendar",
+        )
+    elif result == "available_clave" and last != "available_clave":
+        # Cl@ve slots tend to stay open for stretches — only ping on the
+        # transition so the phone isn't buzzed every 12 minutes.
+        notify(
+            "Cita available via Cl@ve",
+            f"No slots WITHOUT Cl@ve, but slots ARE bookable WITH Cl@ve.\n"
+            f"Tramite {TRAMITE_ID} (Barcelona extranjeria).\n"
+            f"Book with Cl@ve: {START_URL}",
+            priority="high",
+            tags="key,calendar",
         )
     elif result == "captcha":
         notify(
