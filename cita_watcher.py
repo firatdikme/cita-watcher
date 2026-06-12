@@ -42,9 +42,6 @@ TIMEOUT_MS   = int(os.environ.get("CITA_TIMEOUT_MS", "60000"))
 JITTER_MAX_S = int(os.environ.get("CITA_JITTER_MAX_S", "90"))
 
 NO_SLOTS_MARKER = "no hay citas disponibles"
-# Final page may say "no slots without Cl@ve" while offering slots VIA Cl@ve:
-# "SI TIENEN A SU DISPOSICION MEDIANTE EL USO DE CL@VE, CITAS DISPONIBLES..."
-CLAVE_SLOTS_MARKER = "citas disponibles para su reserva"
 # ============================================================================
 
 
@@ -174,8 +171,6 @@ def check_once() -> str:
             if page.locator("iframe[src*='recaptcha'], iframe[src*='hcaptcha']").count() > 0:
                 return "captcha"
             if NO_SLOTS_MARKER in text:
-                if "cl@ve" in text and CLAVE_SLOTS_MARKER in text:
-                    return "available_clave"
                 return "unavailable"
             return "available"
 
@@ -220,20 +215,11 @@ def main() -> None:
     if result == "available":
         notify(
             "CITA VAR - hemen gir!",
-            f"Slot found WITHOUT Cl@ve for {DOC_TYPE} {DOC_NUMBER}.\n"
+            f"Slot found for {DOC_TYPE} {DOC_NUMBER}.\n"
             f"Tramite {TRAMITE_ID} at sede {SEDE_ID} (Barcelona extranjeria).\n"
             f"Book NOW: {START_URL}",
             priority="urgent",
             tags="rotating_light,calendar",
-        )
-    elif result == "available_clave":
-        notify(
-            "Cl@ve ile cita var",
-            f"No slots WITHOUT Cl@ve, but slots ARE bookable WITH Cl@ve.\n"
-            f"Tramite {TRAMITE_ID} (Barcelona extranjeria).\n"
-            f"Book with Cl@ve: {START_URL}",
-            priority="high",
-            tags="key,calendar",
         )
     elif result == "unavailable":
         notify(
